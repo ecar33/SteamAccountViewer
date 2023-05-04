@@ -4,8 +4,8 @@ from controller import *
 def main():
     application = QApplication([])
     window = Controller()
-    window.setFixedSize(400, 550)
-    window.setWindowTitle("Final Project_1")
+    window.setFixedSize(450, 550)
+    window.setWindowTitle("SteamUserViewer")
     window.show()
     application.exec_()
 
