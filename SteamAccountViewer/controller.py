@@ -2,12 +2,13 @@ from PyQt5.QtWidgets import *
 from view import *
 from steam.webapi import WebAPI
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import Qt, QUrl
+from PyQt5.QtCore import Qt, QUrl, QTimer
 from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
-from steam.steamid import SteamID
 from dotenv import load_dotenv
 import os
 from datetime import datetime
+import requests
+from steam.steamid import SteamID
 
 load_dotenv()
 
@@ -21,8 +22,10 @@ class Controller(QMainWindow, Ui_MainWindow):
         self.setupUi(self)
         self.submit_pushButton.clicked.connect(lambda: self.on_submit_press())
         self.page_pushButton.clicked.connect(lambda: self.next_page())
+        self.view_another_pushButton.clicked.connect(lambda:self.on_view_another_press())
         self.manager = QNetworkAccessManager()
         self.api = WebAPI(key=os.getenv("API_KEY"))
+        self.steamid_lineEdit.setFocus()
 
     def on_submit_press(self):
 
@@ -33,29 +36,60 @@ class Controller(QMainWindow, Ui_MainWindow):
             persona_name, profile_picture_url = self.get_name_and_picture(steam_id)
             self.persona_name_label.setText(persona_name)
             self.display_profile_picture(profile_picture_url)
+            self.get_ban_status(steam_id)
             if self.check_if_public(steam_id):
-                recent_games = self.get_recent_games(steam_id)
-                self.display_recent_games(recent_games)
+                self.get_recent_games(steam_id)
                 self.get_level(steam_id)
                 self.get_creation_date(steam_id)
                 self.get_friend_count(steam_id)
-            else:
                 self.main_stackedWidget.setCurrentIndex(1)
+                self.info_stackedWidget.setCurrentIndex(0)
+            else:
+                self.get_ban_status(steam_id)
                 self.info_stackedWidget.setCurrentIndex(1)
                 self.page_pushButton.hide()
-            self.main_stackedWidget.setCurrentIndex(1)
+                self.main_stackedWidget.setCurrentIndex(1)
         except Exception as e:
             print("Try again: ", e)
 
+    def on_view_another_press(self):
+        self.main_stackedWidget.setCurrentIndex(0)
+        self.steamid_lineEdit.setText('')
+        self.steamid_lineEdit.setFocus()
+        self.reset_to_default_values()
+
+    def reset_to_default_values(self):
+        self.vac_ban_label.setText('VAC Ban: None')
+        self.community_ban_label.setText('Community Ban: None')
+        self.game_ban_label.setText('Game Bans: None')
+        self.economy_ban_label.setText('Trade Ban: None')
+        self.days_since_ban_label.setText('Days since last ban: None on record.')
+
+        self.creation_date_label.setText('Member since: Not available')
+        self.friend_count_label.setText('Friend count: Not available')
+        self.account_level_label.setText('Account level: Not available')
+
+        self.recent_game_1_label.setText("No recent games found!")
+        self.recent_game_2_label.setText('')
+        self.recent_game_3_label.setText('')
+
+
     def check_if_public(self, steam_id):
-        response = self.api.call('ISteamUser.GetPlayerSummaries', steamids=steam_id)
-        community_visibility_state = response["response"]["players"][0]["communityvisibilitystate"]
+        try:
+            response = self.api.call('ISteamUser.GetPlayerSummaries', steamids=steam_id)
+            community_visibility_state = response["response"]["players"][0]["communityvisibilitystate"]
 
-        if community_visibility_state == 1:
-            return False
-        elif community_visibility_state == 3:
-            return True
+            if community_visibility_state in [1, 2]:
+                return False
+            elif community_visibility_state == 3:
+                return True
 
+
+        except(requests.exceptions.RequestException, requests.exceptions.Timeout,
+               requests.exceptions.TooManyRedirects, requests.exceptions.HTTPError,
+               requests.exceptions.ConnectionError) as e:
+            print(f"An error occurred during the API request: {e}")
+            return None
     def next_page(self):
 
         # Get the current index and total number of pages in the QStackedWidget
@@ -77,7 +111,6 @@ class Controller(QMainWindow, Ui_MainWindow):
         steam_id = SteamID.from_url(steam_id)
         steam_id = steam_id.as_64
         return steam_id
-
     def display_recent_games(self, recent_games):
         padded_list = recent_games + [''] * (3 - len(recent_games))
 
@@ -92,9 +125,49 @@ class Controller(QMainWindow, Ui_MainWindow):
             profile_picture_url = response["response"]["players"][0]["avatarfull"]
             return persona_name, profile_picture_url
 
-        except Exception as e:
-            print("Try again: ", e)
-            raise e
+
+        except(requests.exceptions.RequestException, requests.exceptions.Timeout,
+               requests.exceptions.TooManyRedirects, requests.exceptions.HTTPError,
+               requests.exceptions.ConnectionError) as e:
+            print(f"An error occurred during the API request: {e}")
+            return None
+
+    def get_ban_status(self, steam_id):
+        try:
+            response = self.api.call('ISteamUser.GetPlayerBans', steamids=steam_id)
+            player_ban_info = response['players'][0]
+            self.display_bans(player_ban_info)
+
+
+        except(requests.exceptions.RequestException, requests.exceptions.Timeout,
+               requests.exceptions.TooManyRedirects, requests.exceptions.HTTPError,
+               requests.exceptions.ConnectionError) as e:
+            print(f"An error occurred during the API request: {e}")
+            return None
+    def display_bans(self, player_ban_info):
+        flag = False
+        if player_ban_info["CommunityBanned"]:
+            self.community_ban_label.setText('Community Ban: Banned')
+            flag = True
+        if player_ban_info["EconomyBan"] in ["banned", "probation"]:
+            self.economy_ban_label.setText('Trade Ban: Banned')
+            flag = True
+        if player_ban_info["VACBanned"]:
+            self.vac_ban_label.setText('VAC Ban: Banned')
+            flag = True
+        if player_ban_info["NumberOfGameBans"]:
+            self.game_ban_label.setText(f'Game Bans: {player_ban_info["NumberOfGameBans"]}')
+            flag = True
+        if player_ban_info["DaysSinceLastBan"]:
+            self.days_since_ban_label.setText(f'Days since last ban: {player_ban_info["DaysSinceLastBan"]}')
+            flag = True
+        else:
+            self.ban_status_stackedWidget.setCurrentIndex(1)
+
+        if flag:
+            self.ban_status_stackedWidget.setCurrentIndex(0)
+
+
 
     def get_recent_games(self, steam_id):
         try:
@@ -102,29 +175,58 @@ class Controller(QMainWindow, Ui_MainWindow):
             response = self.api.call('IPlayerService.GetRecentlyPlayedGames', steamid=steam_id,
                                      count=game_count)
             recent_games = []
-            for game in response['response']['games']:
-                recent_games.append(game['name'])
+            if response['response'] and response['response']['total_count'] > 0:
+                for game in response['response']['games']:
+                    recent_games.append(game['name'])
+                self.display_recent_games(recent_games)
+            else:
+                return None
 
-            return recent_games
+
+        except(requests.exceptions.RequestException, requests.exceptions.Timeout,
+               requests.exceptions.TooManyRedirects, requests.exceptions.HTTPError,
+               requests.exceptions.ConnectionError) as e:
+
+            print(f"An error occurred during the API request: {e}")
+            return None
+
+    def get_level(self, steam_id):
+        try:
+            response = self.api.call('IPlayerService.GetSteamLevel', steamid=steam_id)
+            account_level = response['response']['player_level']
+            self.account_level_label.setText(f'Account level: {account_level}')
+
+
+        except(requests.exceptions.RequestException, requests.exceptions.Timeout,
+               requests.exceptions.TooManyRedirects, requests.exceptions.HTTPError,
+               requests.exceptions.ConnectionError) as e:
+
+            print(f"An error occurred during the API request: {e}")
+            return None
+
+    def get_friend_count(self, steam_id):
+        try:
+            response = self.api.call('ISteamUser.GetFriendList', steamid=steam_id)
+            friend_count = len(response['friendslist']['friends'])
+            self.friend_count_label.setText(f'Friend count: {friend_count}')
+
+
+        except(requests.exceptions.RequestException, requests.exceptions.Timeout,
+                requests.exceptions.TooManyRedirects, requests.exceptions.HTTPError,
+                requests.exceptions.ConnectionError) as e:
+            print(f"An error occurred during the API request: {e}")
+            return None
+
+    def get_creation_date(self, steam_id):
+        try:
+            response = self.api.call('ISteamUser.GetPlayerSummaries', steamids=steam_id)
+            creation_time = response['response']['players'][0]['timecreated']
+            creation_date = datetime.utcfromtimestamp(creation_time).strftime('%Y-%m-%d %H:%M:%S')
+            self.creation_date_label.setText(f'Member since: {creation_date}')
+
         except Exception as e:
             print("Try again: ", e)
             raise e
-
-    def get_level(self, steam_id):
-        response = self.api.call('IPlayerService.GetSteamLevel', steamid=steam_id)
-        account_level = response['response']['player_level']
-        self.account_level_label.setText(f'Account level: {account_level}')
-
-    def get_friend_count(self, steam_id):
-        response = self.api.call('ISteamUser.GetFriendList', steamid=steam_id)
-        friend_count = len(response['friendslist']['friends'])
-        self.friend_count_label.setText(f'Friend count: {friend_count}')
-
-    def get_creation_date(self, steam_id):
-        response = self.api.call('ISteamUser.GetPlayerSummaries', steamids=steam_id)
-        creation_time = response['response']['players'][0]['timecreated']
-        creation_date = datetime.utcfromtimestamp(creation_time).strftime('%Y-%m-%d %H:%M:%S')
-        self.creation_date_label.setText(f'Member since: {creation_date}')
 
     def display_profile_picture(self, profile_picture_url):
         def handle_image_download(reply):
@@ -138,7 +240,11 @@ class Controller(QMainWindow, Ui_MainWindow):
             else:
                 print("Error: ", reply.errorString())
 
-        url = QUrl(profile_picture_url)
-        request = QNetworkRequest(url)
-        reply = self.manager.get(request)
-        reply.finished.connect(lambda: handle_image_download(reply))
+        def start_image_download():
+            url = QUrl(profile_picture_url)
+            request = QNetworkRequest(url)
+            reply = self.manager.get(request)
+            reply.finished.connect(lambda: handle_image_download(reply))
+
+        delay_ms = 500  # Delay in milliseconds (1000 ms = 1 second)
+        QTimer.singleShot(delay_ms, start_image_download)
